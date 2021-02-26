@@ -1,0 +1,53 @@
+specVersion: "2.0"
+metadata:
+  name: nw.epm.refapps.shop
+type: application
+framework:
+  name: SAPUI5
+  version: 1.87.0
+  libraries:
+    - name: sap.ui.fl
+    - name: sap.ui.core
+    - name: sap.m
+    - name: sap.f
+    - name: sap.ushell
+    - name: sap.ui.layout
+    - name: sap.ui.comp
+    - name: sap.uxap
+    - name: sap.ui.generic.app
+    - name: sap.ui.table
+    - name: themelib_sap_fiori_3
+server:
+  customMiddleware:
+    - name: fiori-tools-proxy
+      afterMiddleware: compression
+      configuration:
+        backend:
+          - path: /sap
+            url: ""
+            destination: RefAppsBackend
+          - path: /sap/opu/odata
+            pathPrefix: /sap/opu/odata
+            url: ""
+            destination: RefAppsBackend
+          - path: /sap/public/bc/NWDEMO_MODEL
+            pathPrefix: /sap/public/bc/NWDEMO_MODEL
+            url: ""
+            destination: RefAppsBackend
+          - path: /sap/bc/lrep/
+            pathPrefix: /sap/bc/lrep/
+            url: ""
+            destination: RefAppsBackend
+          - path: /webapp/Component-changes.json
+            pathPrefix: /sap/bc/ui5_ui5/sap/epmra_shop/Component-changes.json
+            url: ""
+            destination: RefAppsBackend
+          - path: Component-changes.json
+            pathPrefix: /sap/bc/ui5_ui5/sap/epmra_shop/Component-changes.json
+            url: ""
+            destination: RefAppsBackend
+    - name: fiori-tools-appreload
+      afterMiddleware: compression
+      configuration:
+        port: 35729
+        path: webapp

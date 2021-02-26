@@ -1,67 +1,135 @@
-sap.ui.define([
-		"sap/ui/core/util/MockServer",
-		"nw/epm/refapps/shop/localService/MockRequests"
-	], function(MockServer, MockRequests) {
-	"use strict";
-	var oMockServer,
-		_sAppModulePath = "nw/epm/refapps/shop/",
-		_sJsonFilesModulePath = _sAppModulePath + "localService/mockdata";
+sap.ui.define(
+  [
+    "sap/ui/core/util/MockServer",
+    "sap/ui/model/json/JSONModel",
+    "sap/base/Log",
+    "sap/base/util/UriParameters",
+  ],
+  function (MockServer, JSONModel, Log, UriParameters) {
+    "use strict";
 
-	return {
+    var oMockServer,
+      _sAppPath = "nw/epm/refapps/shop/",
+      _sJsonFilesPath = _sAppPath + "localService/mockdata";
 
-		/**
-		 * Initializes the mock server.
-		 * You can configure the delay with the URL parameter "serverDelay".
-		 * The local mock data in this folder is returned instead of the real data for testing.
-		 * @public
-		 */
-		init: function() {
-			var oUriParameters = jQuery.sap.getUriParameters(),
-				sJsonFilesUrl = jQuery.sap.getModulePath(_sJsonFilesModulePath),
-				sManifestUrl = jQuery.sap.getModulePath(_sAppModulePath + "manifest", ".json"),
-				oManifest = jQuery.sap.syncGetJSON(sManifestUrl).data,
-				oMainDataSource = oManifest["sap.app"].dataSources.mainService,
-				sMetadataUrl = jQuery.sap.getModulePath(_sAppModulePath + oMainDataSource.settings.localUri.replace(".xml", ""), ".xml"),
-				// ensure there is a trailing slash
-				sMockServerUrl = /.*\/$/.test(oMainDataSource.uri) ? oMainDataSource.uri : oMainDataSource.uri + "/";
+    var oMockServerInterface = {
+      /**
+       * Initializes the mock server asynchronously.
+       * You can configure the delay with the URL parameter "serverDelay".
+       * The local mock data in this folder is returned instead of the real data for testing.
+       * @protected
+       * @param {object} [oOptionsParameter] init parameters for the mockserver
+       * @returns{Promise} a promise that is resolved when the mock server has been started
+       */
+      init: function (oOptionsParameter) {
+        var oOptions = oOptionsParameter || {};
 
-			oMockServer = new MockServer({
-				rootUri: sMockServerUrl
-			});
+        return new Promise(function (fnResolve, fnReject) {
+          var sManifestUrl = sap.ui.require.toUrl(_sAppPath + "manifest.json"),
+            oManifestModel = new JSONModel(sManifestUrl);
 
-			// configure mock server with a delay of 1s
-			MockServer.config({
-				autoRespond: true,
-				autoRespondAfter: (oUriParameters.get("serverDelay") || 100)
-			});
+          oManifestModel.attachRequestCompleted(function () {
+            var oUriParameters = new UriParameters(window.location.href),
+              // parse manifest for local metadata URI
+              sJsonFilesUrl = sap.ui.require.toUrl(_sJsonFilesPath),
+              oDataSource = oManifestModel.getProperty("/sap.app/dataSources"),
+              oMainDataSource = oDataSource.mainService,
+              sMetadataUrl = sap.ui.require.toUrl(
+                _sAppPath + oMainDataSource.settings.localUri
+              ),
+              // ensure there is a trailing slash
+              sMockServerUrl = /.*\/$/.test(oMainDataSource.uri)
+                ? oMainDataSource.uri
+                : oMainDataSource.uri + "/";
+            // ensure the URL to be relative to the application
+            sMockServerUrl =
+              sMockServerUrl &&
+              new URI(sMockServerUrl)
+                .absoluteTo(sap.ui.require.toUrl(_sAppPath))
+                .toString();
 
-			// enable 'mock' variant management
-			jQuery.sap.require("sap.ui.fl.FakeLrepConnector");
-			sap.ui.fl.FakeLrepConnector.enableFakeConnector(sJsonFilesUrl + "/component-test-changes.json");
+            // create a mock server instance or stop the existing one to reinitialize
+            if (!oMockServer) {
+              oMockServer = new MockServer({
+                rootUri: sMockServerUrl,
+              });
+            } else {
+              oMockServer.stop();
+            }
 
-			var oRequests = new MockRequests(oMockServer);
+            // configure mock server with the given options or a default delay of 0.5s
+            MockServer.config({
+              autoRespond: true,
+              autoRespondAfter:
+                oOptions.delay || oUriParameters.get("serverDelay") || 500,
+            });
 
-			// load local mock data
-			oMockServer.simulate(sMetadataUrl, {
-				sMockdataBaseUrl: sJsonFilesUrl,
-				bGenerateMissingMockData: true
-			});
+            // simulate all requests using mock data
+            oMockServer.simulate(sMetadataUrl, {
+              sMockdataBaseUrl: sJsonFilesUrl,
+              bGenerateMissingMockData: true,
+            });
 
-			var aRequests = oMockServer.getRequests();
-			oMockServer.setRequests(aRequests.concat(oRequests.getRequests()));
+            var aRequests = oMockServer.getRequests();
 
-			oMockServer.start();
+            // compose an error response for each request
+            var fnResponse = function (iErrCode, sMessage, aRequest) {
+              aRequest.response = function (oXhr) {
+                oXhr.respond(
+                  iErrCode,
+                  { "Content-Type": "text/plain;charset=utf-8" },
+                  sMessage
+                );
+              };
+            };
 
-			jQuery.sap.log.info("Running the app with mock data");
-		},
+            // simulate metadata errors
+            if (oOptions.metadataError || oUriParameters.get("metadataError")) {
+              aRequests.forEach(function (aEntry) {
+                if (aEntry.path.toString().indexOf("$metadata") > -1) {
+                  fnResponse(500, "metadata Error", aEntry);
+                }
+              });
+            }
 
-		/**
-		 * @public returns the mockserver of the app, should be used in integration tests
-		 * @returns {sap.ui.core.util.MockServer} the mockserver instance
-		 */
-		getMockServer: function() {
-			return oMockServer;
-		}
-	};
+            // simulate request errors
+            var sErrorParam =
+                oOptions.errorType || oUriParameters.get("errorType"),
+              iErrorCode = sErrorParam === "badRequest" ? 400 : 500;
+            if (sErrorParam) {
+              aRequests.forEach(function (aEntry) {
+                fnResponse(iErrorCode, sErrorParam, aEntry);
+              });
+            }
 
-});
+            // custom mock behaviour may be added here
+
+            // set requests and start the server
+            oMockServer.setRequests(aRequests);
+            oMockServer.start();
+
+            Log.info("Running the app with mock data");
+            fnResolve();
+          });
+
+          oManifestModel.attachRequestFailed(function () {
+            var sError = "Failed to load application manifest";
+
+            Log.error(sError);
+            fnReject(new Error(sError));
+          });
+        });
+      },
+
+      /**
+       * @public returns the mockserver of the app, should be used in integration tests
+       * @returns {sap.ui.core.util.MockServer} the mockserver instance
+       */
+      getMockServer: function () {
+        return oMockServer;
+      },
+    };
+
+    return oMockServerInterface;
+  }
+);
